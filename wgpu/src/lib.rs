@@ -695,10 +695,6 @@ impl core::Renderer for Renderer {
         layer.draw_quad(quad, background.into(), transformation);
     }
 
-    fn reset(&mut self, new_bounds: Rectangle) {
-        self.layers.reset(new_bounds);
-    }
-
     fn allocate_image(
         &self,
         _handle: &core::image::Handle,
@@ -710,6 +706,15 @@ impl core::Renderer for Renderer {
         self.image_cache
             .borrow_mut()
             .allocate_image(_handle, _callback);
+    }
+
+    fn tick(&mut self) {
+        #[cfg(feature = "image")]
+        self.image_cache.get_mut().receive();
+    }
+
+    fn reset(&mut self, new_bounds: Rectangle) {
+        self.layers.reset(new_bounds);
     }
 }
 

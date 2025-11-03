@@ -16,8 +16,6 @@ impl Renderer for () {
 
     fn end_transformation(&mut self) {}
 
-    fn reset(&mut self, _new_bounds: Rectangle) {}
-
     fn fill_quad(
         &mut self,
         _quad: renderer::Quad,
@@ -35,6 +33,8 @@ impl Renderer for () {
         #[allow(unsafe_code)]
         callback(Ok(unsafe { image::allocate(handle, Size::new(100, 100)) }));
     }
+
+    fn reset(&mut self, _new_bounds: Rectangle) {}
 }
 
 impl text::Renderer for () {

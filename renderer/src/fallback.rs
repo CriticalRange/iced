@@ -46,10 +46,6 @@ where
         delegate!(self, renderer, renderer.fill_quad(quad, background.into()));
     }
 
-    fn reset(&mut self, new_bounds: Rectangle) {
-        delegate!(self, renderer, renderer.reset(new_bounds));
-    }
-
     fn start_layer(&mut self, bounds: Rectangle) {
         delegate!(self, renderer, renderer.start_layer(bounds));
     }
@@ -78,6 +74,14 @@ where
         + 'static,
     ) {
         delegate!(self, renderer, renderer.allocate_image(handle, callback));
+    }
+
+    fn tick(&mut self) {
+        delegate!(self, renderer, renderer.tick());
+    }
+
+    fn reset(&mut self, new_bounds: Rectangle) {
+        delegate!(self, renderer, renderer.reset(new_bounds));
     }
 }
 

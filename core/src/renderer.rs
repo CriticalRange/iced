@@ -61,9 +61,6 @@ pub trait Renderer {
     /// Fills a [`Quad`] with the provided [`Background`].
     fn fill_quad(&mut self, quad: Quad, background: impl Into<Background>);
 
-    /// Resets the [`Renderer`] to start drawing in the `new_bounds` from scratch.
-    fn reset(&mut self, new_bounds: Rectangle);
-
     /// Creates an [`image::Allocation`] for the given [`image::Handle`] and calls the given callback with it.
     fn allocate_image(
         &self,
@@ -72,6 +69,14 @@ pub trait Renderer {
         + Send
         + 'static,
     );
+
+    /// Resets the [`Renderer`] to start drawing in the `new_bounds` from scratch.
+    fn reset(&mut self, new_bounds: Rectangle);
+
+    /// Polls any concurrent computations that may be pending in the [`Renderer`].
+    ///
+    /// By default, it does nothing.
+    fn tick(&mut self) {}
 }
 
 /// A polygon with four sides.
