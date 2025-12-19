@@ -468,13 +468,7 @@ where
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 if self.selectable && state.is_dragging {
-                    if let Some(position) = cursor.position_from(layout.position()) {
-                        let bounds = layout.bounds();
-                        let position = Point::new(
-                            position.x.clamp(0.0, bounds.width),
-                            position.y.clamp(0.0, bounds.height),
-                        );
-
+                    if let Some(position) = cursor.position_in(layout.bounds()) {
                         if let Some(hit) = state.paragraph.hit_test(position) {
                             let new_end = hit.cursor();
                             if state.selection_end != Some(new_end) {
