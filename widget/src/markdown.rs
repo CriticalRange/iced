@@ -1013,6 +1013,8 @@ pub struct Settings {
     pub spacing: Pixels,
     /// The styling of the Markdown.
     pub style: Style,
+    /// Whether text can be selected.
+    pub selectable: bool,
 }
 
 impl Settings {
@@ -1040,7 +1042,14 @@ impl Settings {
             code_size: text_size * 0.75,
             spacing: text_size * 0.875,
             style: style.into(),
+            selectable: true,
         }
+    }
+
+    /// Sets whether the text in the markdown view can be selected.
+    pub fn selectable(mut self, selectable: bool) -> Self {
+        self.selectable = selectable;
+        self
     }
 }
 
@@ -1245,21 +1254,26 @@ where
         h5_size,
         h6_size,
         text_size,
+        selectable,
         ..
     } = settings;
 
-    container(
-        rich_text(text.spans(settings.style))
-            .on_link_click(on_link_click)
-            .size(match level {
-                pulldown_cmark::HeadingLevel::H1 => h1_size,
-                pulldown_cmark::HeadingLevel::H2 => h2_size,
-                pulldown_cmark::HeadingLevel::H3 => h3_size,
-                pulldown_cmark::HeadingLevel::H4 => h4_size,
-                pulldown_cmark::HeadingLevel::H5 => h5_size,
-                pulldown_cmark::HeadingLevel::H6 => h6_size,
-            }),
-    )
+    let mut text_widget = rich_text(text.spans(settings.style))
+        .on_link_click(on_link_click)
+        .size(match level {
+            pulldown_cmark::HeadingLevel::H1 => h1_size,
+            pulldown_cmark::HeadingLevel::H2 => h2_size,
+            pulldown_cmark::HeadingLevel::H3 => h3_size,
+            pulldown_cmark::HeadingLevel::H4 => h4_size,
+            pulldown_cmark::HeadingLevel::H5 => h5_size,
+            pulldown_cmark::HeadingLevel::H6 => h6_size,
+        });
+
+    if selectable {
+        text_widget = text_widget.selectable();
+    }
+
+    container(text_widget)
     .padding(padding::top(if index > 0 {
         text_size / 2.0
     } else {
@@ -1279,10 +1293,15 @@ where
     Theme: Catalog + 'a,
     Renderer: core::text::Renderer<Font = Font> + 'a,
 {
-    rich_text(text.spans(settings.style))
+    let mut text_widget = rich_text(text.spans(settings.style))
         .size(settings.text_size)
-        .on_link_click(on_link_click)
-        .into()
+        .on_link_click(on_link_click);
+
+    if settings.selectable {
+        text_widget = text_widget.selectable();
+    }
+
+    text_widget.into()
 }
 
 /// Displays an unordered list using the default look and
@@ -1380,11 +1399,16 @@ where
     container(
         scrollable(
             container(column(lines.iter().map(|line| {
-                rich_text(line.spans(settings.style))
+                let mut text_widget = rich_text(line.spans(settings.style))
                     .on_link_click(on_link_click.clone())
                     .font(settings.style.code_block_font)
-                    .size(settings.code_size)
-                    .into()
+                    .size(settings.code_size);
+
+                if settings.selectable {
+                    text_widget = text_widget.selectable();
+                }
+
+                text_widget.into()
             })))
             .padding(settings.code_size),
         )

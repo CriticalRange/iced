@@ -1,4 +1,6 @@
 use crate::core::alignment;
+use crate::core::clipboard::{self, Clipboard};
+use crate::core::keyboard;
 use crate::core::layout;
 use crate::core::mouse;
 use crate::core::renderer;
@@ -8,7 +10,7 @@ use crate::core::widget::text::{
 };
 use crate::core::widget::tree::{self, Tree};
 use crate::core::{
-    self, Clipboard, Color, Element, Event, Layout, Length, Pixels, Point, Rectangle, Shell, Size,
+    self, Color, Element, Event, Layout, Length, Pixels, Point, Rectangle, Shell, Size,
     Vector, Widget,
 };
 
@@ -31,6 +33,8 @@ where
     class: Theme::Class<'a>,
     hovered_link: Option<usize>,
     on_link_click: Option<Box<dyn Fn(Link) -> Message + 'a>>,
+    selectable: bool,
+    selection_color: Color,
 }
 
 impl<'a, Link, Message, Theme, Renderer> Rich<'a, Link, Message, Theme, Renderer>
@@ -55,6 +59,8 @@ where
             class: Theme::default(),
             hovered_link: None,
             on_link_click: None,
+            selectable: false,
+            selection_color: Color::from_rgba(0.0, 0.0, 1.0, 0.3),
         }
     }
 
@@ -166,6 +172,21 @@ where
         self.class = class.into();
         self
     }
+
+    /// Enables text selection for the [`Rich`] text.
+    ///
+    /// When enabled, users can click and drag to select text,
+    /// and use Ctrl+C/Cmd+C to copy the selected text.
+    pub fn selectable(mut self) -> Self {
+        self.selectable = true;
+        self
+    }
+
+    /// Sets the selection highlight [`Color`] for the [`Rich`] text.
+    pub fn selection_color(mut self, color: impl Into<Color>) -> Self {
+        self.selection_color = color.into();
+        self
+    }
 }
 
 impl<'a, Link, Message, Theme, Renderer> Default for Rich<'a, Link, Message, Theme, Renderer>
@@ -184,6 +205,12 @@ struct State<Link, P: Paragraph> {
     spans: Vec<Span<'static, Link, P::Font>>,
     span_pressed: Option<usize>,
     paragraph: P,
+    /// Selection start position (character offset)
+    selection_start: Option<usize>,
+    /// Selection end position (character offset), also the current cursor position during drag
+    selection_end: Option<usize>,
+    /// Whether the user is currently dragging to select text
+    is_dragging: bool,
 }
 
 impl<Link, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
@@ -202,6 +229,9 @@ where
             spans: Vec::new(),
             span_pressed: None,
             paragraph: Renderer::Paragraph::default(),
+            selection_start: None,
+            selection_end: None,
+            is_dragging: false,
         })
     }
 
@@ -254,6 +284,26 @@ where
             .downcast_ref::<State<Link, Renderer::Paragraph>>();
 
         let style = theme.style(&self.class);
+
+        // Draw selection highlight if there's a selection
+        if self.selectable {
+            if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                if start != end {
+                    let translation = layout.position() - Point::ORIGIN;
+                    let selection_rects = state.paragraph.selection_bounds(start, end);
+
+                    for bounds in selection_rects {
+                        renderer.fill_quad(
+                            renderer::Quad {
+                                bounds: bounds + translation,
+                                ..Default::default()
+                            },
+                            self.selection_color,
+                        );
+                    }
+                }
+            }
+        }
 
         for (index, span) in self.spans.as_ref().as_ref().iter().enumerate() {
             let is_hovered_link = self.on_link_click.is_some() && Some(index) == self.hovered_link;
@@ -345,21 +395,18 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         _renderer: &Renderer,
-        _clipboard: &mut dyn Clipboard,
+        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
-        let Some(on_link_clicked) = &self.on_link_click else {
-            return;
-        };
+        let state = tree
+            .state
+            .downcast_mut::<State<Link, Renderer::Paragraph>>();
 
+        // Update hovered link state
         let was_hovered = self.hovered_link.is_some();
 
         if let Some(position) = cursor.position_in(layout.bounds()) {
-            let state = tree
-                .state
-                .downcast_ref::<State<Link, Renderer::Paragraph>>();
-
             self.hovered_link = state.paragraph.hit_span(position).and_then(|span| {
                 if self.spans.as_ref().as_ref().get(span)?.link.is_some() {
                     Some(span)
@@ -377,36 +424,136 @@ where
 
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-                let state = tree
-                    .state
-                    .downcast_mut::<State<Link, Renderer::Paragraph>>();
-
-                if self.hovered_link.is_some() {
-                    state.span_pressed = self.hovered_link;
-                    shell.capture_event();
+                if let Some(position) = cursor.position_in(layout.bounds()) {
+                    // First, check if we're clicking on a link
+                    if self.hovered_link.is_some() && self.on_link_click.is_some() {
+                        state.span_pressed = self.hovered_link;
+                        shell.capture_event();
+                    } else if self.selectable {
+                        // Clear any existing selection and start a new one
+                        let had_selection = state.selection_start.is_some() 
+                            && state.selection_end.is_some()
+                            && state.selection_start != state.selection_end;
+                        
+                        if let Some(hit) = state.paragraph.hit_test(position) {
+                            let offset = hit.cursor();
+                            state.selection_start = Some(offset);
+                            state.selection_end = Some(offset);
+                            state.is_dragging = true;
+                            shell.capture_event();
+                        } else {
+                            // Clicked in bounds but not on text - clear selection
+                            state.selection_start = None;
+                            state.selection_end = None;
+                            state.is_dragging = false;
+                        }
+                        
+                        if had_selection {
+                            shell.request_redraw();
+                        }
+                    }
+                } else if self.selectable {
+                    // Clicked outside this widget - clear selection if we had one
+                    let had_selection = state.selection_start.is_some() 
+                        && state.selection_end.is_some()
+                        && state.selection_start != state.selection_end;
+                    
+                    if had_selection {
+                        state.selection_start = None;
+                        state.selection_end = None;
+                        state.is_dragging = false;
+                        shell.request_redraw();
+                    }
+                }
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+                if self.selectable && state.is_dragging {
+                    if let Some(position) = cursor.position_in(layout.bounds()) {
+                        if let Some(hit) = state.paragraph.hit_test(position) {
+                            let new_end = hit.cursor();
+                            if state.selection_end != Some(new_end) {
+                                state.selection_end = Some(new_end);
+                                shell.request_redraw();
+                            }
+                        }
+                    }
                 }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                let state = tree
-                    .state
-                    .downcast_mut::<State<Link, Renderer::Paragraph>>();
-
-                match state.span_pressed {
-                    Some(span) if Some(span) == self.hovered_link => {
-                        if let Some(link) = self
-                            .spans
-                            .as_ref()
-                            .as_ref()
-                            .get(span)
-                            .and_then(|span| span.link.clone())
-                        {
-                            shell.publish(on_link_clicked(link));
+                // Handle link click
+                if let Some(on_link_clicked) = &self.on_link_click {
+                    match state.span_pressed {
+                        Some(span) if Some(span) == self.hovered_link => {
+                            if let Some(link) = self
+                                .spans
+                                .as_ref()
+                                .as_ref()
+                                .get(span)
+                                .and_then(|span| span.link.clone())
+                            {
+                                shell.publish(on_link_clicked(link));
+                            }
                         }
+                        _ => {}
+                    }
+                }
+                state.span_pressed = None;
+                
+                // End selection drag
+                if self.selectable {
+                    state.is_dragging = false;
+                }
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
+                modifiers,
+                ..
+            }) if self.selectable => {
+                let command = modifiers.command();
+                
+                match key.as_ref() {
+                    keyboard::Key::Character("c") if command => {
+                        // Copy selected text
+                        if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                            // Extract text from spans
+                            let (min, max) = if start <= end {
+                                (start, end)
+                            } else {
+                                (end, start)
+                            };
+
+                            let all_text: String = self.spans
+                                .as_ref()
+                                .as_ref()
+                                .iter()
+                                .map(|span| span.text.as_ref())
+                                .collect();
+
+                            if min < all_text.len() {
+                                let end_clamped = max.min(all_text.len());
+                                let selected = all_text[min..end_clamped].to_string();
+                                if !selected.is_empty() {
+                                    clipboard.write(clipboard::Kind::Standard, selected);
+                                    shell.capture_event();
+                                }
+                            }
+                        }
+                    }
+                    keyboard::Key::Character("a") if command => {
+                        // Select all - calculate total length inline
+                        let total_len: usize = self.spans
+                            .as_ref()
+                            .as_ref()
+                            .iter()
+                            .map(|span| span.text.as_ref().len())
+                            .sum();
+                        state.selection_start = Some(0);
+                        state.selection_end = Some(total_len);
+                        shell.capture_event();
+                        shell.request_redraw();
                     }
                     _ => {}
                 }
-
-                state.span_pressed = None;
             }
             _ => {}
         }
@@ -415,13 +562,15 @@ where
     fn mouse_interaction(
         &self,
         _tree: &Tree,
-        _layout: Layout<'_>,
-        _cursor: mouse::Cursor,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
         if self.hovered_link.is_some() {
             mouse::Interaction::Pointer
+        } else if self.selectable && cursor.is_over(layout.bounds()) {
+            mouse::Interaction::Text
         } else {
             mouse::Interaction::None
         }

@@ -374,6 +374,75 @@ impl core::text::Paragraph for Paragraph {
         bounds
     }
 
+    fn selection_bounds(&self, start: usize, end: usize) -> Vec<Rectangle> {
+        let internal = self.internal();
+        let hint_factor = self.0.hint_factor;
+
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+
+        let mut bounds = Vec::new();
+
+        for run in internal.buffer.layout_runs() {
+            let line_top = run.line_top;
+            let line_height = run.line_height;
+
+            // Track the current selection rectangle on this line
+            let mut line_start_x: Option<f32> = None;
+            let mut line_end_x: f32 = 0.0;
+
+            for glyph in run.glyphs.iter() {
+                let glyph_start = glyph.start;
+                let glyph_end = glyph.end;
+
+                // Check if this glyph overlaps with the selection
+                if glyph_end > start && glyph_start < end {
+                    // This glyph is at least partially selected
+                    let glyph_x = glyph.x / hint_factor;
+                    let glyph_w = glyph.w / hint_factor;
+
+                    if line_start_x.is_none() {
+                        // Start of selection on this line
+                        // Calculate partial offset if selection starts within this glyph
+                        if glyph_start < start {
+                            let char_width = glyph_w / (glyph_end - glyph_start).max(1) as f32;
+                            line_start_x = Some(glyph_x + char_width * (start - glyph_start) as f32);
+                        } else {
+                            line_start_x = Some(glyph_x);
+                        }
+                    }
+
+                    // Update end position
+                    // Calculate partial offset if selection ends within this glyph
+                    if glyph_end > end {
+                        let char_width = glyph_w / (glyph_end - glyph_start).max(1) as f32;
+                        line_end_x = glyph_x + char_width * (end - glyph_start) as f32;
+                    } else {
+                        line_end_x = glyph_x + glyph_w;
+                    }
+                }
+            }
+
+            // If we found selection on this line, add the rectangle
+            if let Some(start_x) = line_start_x {
+                let y = line_top / hint_factor;
+                let height = line_height / hint_factor;
+
+
+
+                bounds.push(Rectangle::new(
+                    Point::new(start_x, y),
+                    Size::new((line_end_x - start_x).max(1.0), height),
+                ));
+            }
+        }
+
+        bounds
+    }
+
     fn grapheme_position(&self, line: usize, index: usize) -> Option<Point> {
         use unicode_segmentation::UnicodeSegmentation;
 
